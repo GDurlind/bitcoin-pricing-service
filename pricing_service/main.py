@@ -1,5 +1,6 @@
 """FastAPI app: /api/price plus the static dashboard."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 
 from pricing_service.aggregator import QuoteStatus, SourceBreakdown, consensus
 from pricing_service.models import SourceFailure, partition
-from pricing_service.sources import fetch_all
+from pricing_service.sources import fetch_all, fetch_gbp_rate
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -39,17 +40,23 @@ class SourceBreakdownOut(BaseModel):
     detail: str | None = None
 
 
+class FxOut(BaseModel):
+    gbp_rate: float
+
+
 class PriceResponse(BaseModel):
     price: float
     status: HealthStatus
     as_of: datetime
     sources: list[SourceBreakdownOut]
+    fx: FxOut | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.client = httpx.AsyncClient()
     app.state.last_good = None
+    app.state.last_good_fx = None
     yield
     await app.state.client.aclose()
 
@@ -85,7 +92,7 @@ def _build_breakdown(
 @app.get("/api/price", response_model=PriceResponse)
 async def get_price(request: Request) -> PriceResponse:
     client: httpx.AsyncClient = request.app.state.client
-    results = await fetch_all(client)
+    results, gbp_rate = await asyncio.gather(fetch_all(client), fetch_gbp_rate(client))
     quotes, failures = partition(results)
 
     if not quotes:
@@ -94,12 +101,18 @@ async def get_price(request: Request) -> PriceResponse:
             raise HTTPException(status_code=503, detail="no price sources available yet")
         return cached.model_copy(update={"status": HealthStatus.STALE})
 
+    if gbp_rate is not None:
+        request.app.state.last_good_fx = gbp_rate
+    else:
+        gbp_rate = request.app.state.last_good_fx
+
     result = consensus(quotes)
     response = PriceResponse(
         price=result.price,
         status=HealthStatus.DEGRADED if failures else HealthStatus.LIVE,
         as_of=datetime.now(UTC),
         sources=_build_breakdown(result.breakdown, failures),
+        fx=FxOut(gbp_rate=gbp_rate) if gbp_rate is not None else None,
     )
 
     request.app.state.last_good = response

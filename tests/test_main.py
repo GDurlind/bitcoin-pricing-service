@@ -1,8 +1,10 @@
-"""Endpoint tests. fetch_all is mocked, so nothing here touches the network.
+"""Endpoint tests. fetch_all/fetch_gbp_rate are mocked, so nothing here
+touches the network.
 
-Patched at pricing_service.main.fetch_all — main.py imported the name into
-its own namespace, so patching pricing_service.sources.fetch_all instead
-would silently miss (main would still call its own already-bound reference).
+Patched at pricing_service.main.fetch_all / fetch_gbp_rate — main.py
+imported those names into its own namespace, so patching
+pricing_service.sources.* instead would silently miss (main would still
+call its own already-bound reference).
 """
 
 from datetime import UTC, datetime
@@ -29,13 +31,27 @@ def make_failure(
 def client():
     with TestClient(app) as c:
         # app.state persists across tests on this shared app object; reset the
-        # cache so tests don't depend on execution order.
+        # caches so tests don't depend on execution order.
         app.state.last_good = None
+        app.state.last_good_fx = None
         yield c
+
+
+@pytest.fixture(autouse=True)
+def default_fx():
+    # Every test gets a working FX rate unless it overrides this patch
+    # itself — otherwise every test not focused on FX would need its own
+    # boilerplate mock just to avoid a real network call.
+    with patch("pricing_service.main.fetch_gbp_rate", new=AsyncMock(return_value=0.79)):
+        yield
 
 
 def _mock_fetch_all(results):
     return patch("pricing_service.main.fetch_all", new=AsyncMock(return_value=results))
+
+
+def _mock_fetch_fx(rate: float | None):
+    return patch("pricing_service.main.fetch_gbp_rate", new=AsyncMock(return_value=rate))
 
 
 def test_get_price_all_sources_live(client):
@@ -124,3 +140,37 @@ def test_dashboard_serves_index_html(client):
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+
+
+def test_get_price_includes_gbp_rate_when_fx_available(client):
+    quotes = [make_quote(s, 67_000.0) for s in ("a", "b", "c", "d")]
+
+    with _mock_fetch_all(quotes), _mock_fetch_fx(0.79):
+        response = client.get("/api/price")
+
+    assert response.json()["fx"] == {"gbp_rate": pytest.approx(0.79)}
+
+
+def test_get_price_fx_null_when_unavailable_and_never_cached(client):
+    quotes = [make_quote(s, 67_000.0) for s in ("a", "b", "c", "d")]
+
+    with _mock_fetch_all(quotes), _mock_fetch_fx(None):
+        response = client.get("/api/price")
+
+    assert response.json()["fx"] is None
+
+
+def test_get_price_reuses_cached_fx_when_fx_fails_but_btc_succeeds(client):
+    quotes = [make_quote(s, 67_000.0) for s in ("a", "b", "c", "d")]
+
+    with _mock_fetch_all(quotes), _mock_fetch_fx(0.79):
+        client.get("/api/price")  # populate the fx cache
+
+    with _mock_fetch_all(quotes), _mock_fetch_fx(None):
+        response = client.get("/api/price")
+
+    # BTC sources are fine this poll, so the response is fresh ("live"), but
+    # the FX rate itself is reused from the last time it succeeded.
+    body = response.json()
+    assert body["status"] == "live"
+    assert body["fx"] == {"gbp_rate": pytest.approx(0.79)}

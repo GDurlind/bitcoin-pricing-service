@@ -105,3 +105,23 @@ async def fetch_all(client: httpx.AsyncClient) -> list[SourceResult]:
             *(_fetch_quote(client, s.name, s.url, s.timeout, s.parse) for s in SOURCES)
         )
     )
+
+
+FX_URL = "https://open.er-api.com/v6/latest/USD"
+FX_TIMEOUT = 3.0
+
+
+async def fetch_gbp_rate(client: httpx.AsyncClient) -> float | None:
+    """USD -> GBP spot rate.
+
+    Unlike BTC spot, G10 FX is deep, low-manipulation-risk data that doesn't
+    need cross-source consensus, so a single reputable source is fine. There's
+    no per-source breakdown to explain a failure to, so unlike _fetch_quote
+    this just collapses any failure to None rather than a typed SourceFailure.
+    """
+    try:
+        response = await client.get(FX_URL, timeout=FX_TIMEOUT)
+        response.raise_for_status()
+        return float(response.json()["rates"]["GBP"])
+    except Exception:
+        return None

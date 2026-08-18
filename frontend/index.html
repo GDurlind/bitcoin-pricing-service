@@ -48,10 +48,48 @@
     color: var(--text-secondary);
   }
 
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
   .clock {
     font-size: 13px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .currency-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .currency-toggle button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+
+  .currency-toggle button + button {
+    border-left: 1px solid var(--border-hairline);
+  }
+
+  .currency-toggle button.active {
+    color: var(--text-primary);
+    background: var(--surface-1);
+  }
+
+  .currency-toggle button:disabled {
+    color: var(--gridline);
+    cursor: not-allowed;
   }
 
   .hero {
@@ -163,7 +201,13 @@
   <div class="app">
     <header class="topbar">
       <span class="brand">BTC-USD CONSENSUS</span>
-      <span class="clock" id="clock"></span>
+      <div class="topbar-right">
+        <div class="currency-toggle">
+          <button id="currency-usd" class="active" type="button">USD</button>
+          <button id="currency-gbp" type="button" disabled>GBP</button>
+        </div>
+        <span class="clock" id="clock"></span>
+      </div>
     </header>
 
     <main>
@@ -215,17 +259,49 @@
     const asOfEl = document.getElementById("as-of");
     const breakdownBodyEl = document.getElementById("breakdown-body");
     const clockEl = document.getElementById("clock");
+    const usdButtonEl = document.getElementById("currency-usd");
+    const gbpButtonEl = document.getElementById("currency-gbp");
 
     let lastAsOf = null;
+    let currentData = null;
+    let currency = "USD";
 
-    function formatUsd(value) {
-      return value.toLocaleString("en-US", {
+    // Converts an already-fetched USD figure for display only — the backend
+    // is the source of truth for BTC-USD; GBP is purely a client-side view,
+    // using the rate already carried in the last poll's response.
+    function formatMoney(usdValue) {
+      if (currency === "GBP" && currentData?.fx) {
+        return (usdValue * currentData.fx.gbp_rate).toLocaleString("en-GB", {
+          style: "currency",
+          currency: "GBP",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+      }
+      return usdValue.toLocaleString("en-US", {
         style: "currency",
         currency: "USD",
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
     }
+
+    function setCurrencyButtons() {
+      const gbpAvailable = Boolean(currentData?.fx);
+      if (!gbpAvailable && currency === "GBP") currency = "USD";
+      usdButtonEl.classList.toggle("active", currency === "USD");
+      gbpButtonEl.classList.toggle("active", currency === "GBP");
+      gbpButtonEl.disabled = !gbpAvailable;
+    }
+
+    function selectCurrency(next) {
+      currency = next;
+      setCurrencyButtons();
+      if (currentData) render(currentData);
+    }
+
+    usdButtonEl.addEventListener("click", () => selectCurrency("USD"));
+    gbpButtonEl.addEventListener("click", () => selectCurrency("GBP"));
 
     function formatBps(value) {
       const sign = value > 0 ? "+" : "";
@@ -248,7 +324,7 @@
       const row = document.createElement("tr");
       row.innerHTML = `
         <td class="source">${source.source}</td>
-        <td class="${source.price === null ? "dim" : ""}">${source.price === null ? "—" : formatUsd(source.price)}</td>
+        <td class="${source.price === null ? "dim" : ""}">${source.price === null ? "—" : formatMoney(source.price)}</td>
         <td class="${source.deviation_bps === null ? "dim" : ""}">${source.deviation_bps === null ? "—" : formatBps(source.deviation_bps)}</td>
         <td>${Math.round(source.latency_ms)} ms</td>
         <td>
@@ -261,7 +337,10 @@
     }
 
     function render(data) {
-      priceEl.textContent = formatUsd(data.price);
+      currentData = data;
+      setCurrencyButtons();
+
+      priceEl.textContent = formatMoney(data.price);
       setStatusPill(data.status);
       lastAsOf = data.as_of;
       asOfEl.textContent = secondsAgo(lastAsOf);
