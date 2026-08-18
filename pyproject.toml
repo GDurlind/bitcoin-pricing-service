@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "bitcoin-pricing-service"
+version = "0.1.0"
+description = "Aggregates BTC-USD spot prices from multiple exchange APIs into a single consensus price with outlier rejection"
+authors = [
+    "Gustav Durlind <gustav.durlind@hotmail.com>",
+]
+readme = "README.md"
+packages = [{ include = "pricing_service" }]
+
+[tool.poetry.dependencies]
+python = "^3.14"
+fastapi = "^0.141"
+uvicorn = { extras = ["standard"], version = "^0.52" }
+httpx = "^0.28"
+pydantic = "^2.9"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1"
+pytest-asyncio = "^1.4"
+ruff = "^0.16"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 99
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
