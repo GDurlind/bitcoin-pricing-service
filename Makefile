@@ -47,6 +47,9 @@ format: ## Auto-format source with ruff
 run: ## Serve the API and dashboard locally with auto-reload
 	poetry run uvicorn pricing_service.main:app --host $(HOST) --port $(PORT) --reload
 
+stop: ## Kill whatever is listening on PORT (e.g. a backgrounded `make run`)
+	lsof -ti:$(PORT) | xargs -r kill
+
 # --------------------------------------------------------------------------
 # Docker
 # --------------------------------------------------------------------------
