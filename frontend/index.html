@@ -1,1 +1,388 @@
-<!-- Terminal-style dashboard polling /api/price (Step 6). -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BTC-USD Consensus</title>
+<style>
+  :root {
+    --page-plane: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --border-hairline: rgba(255, 255, 255, 0.10);
+    --gridline: #2c2c2a;
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-critical: #d03b3b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
+    min-height: 100vh;
+  }
+
+  .app {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border-hairline);
+    padding-bottom: 16px;
+    margin-bottom: 40px;
+  }
+
+  .brand {
+    font-size: 13px;
+    letter-spacing: 0.15em;
+    color: var(--text-secondary);
+  }
+
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .clock {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .currency-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .currency-toggle button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+
+  .currency-toggle button + button {
+    border-left: 1px solid var(--border-hairline);
+  }
+
+  .currency-toggle button.active {
+    color: var(--text-primary);
+    background: var(--surface-1);
+  }
+
+  .currency-toggle button:disabled {
+    color: var(--gridline);
+    cursor: not-allowed;
+  }
+
+  .hero {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  .price {
+    font-size: clamp(48px, 10vw, 88px);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hero-meta {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border: 1px solid var(--border-hairline);
+    border-radius: 999px;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+
+  .status-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .status-pill.status-good    { color: var(--status-good); }
+  .status-pill.status-warning { color: var(--status-warning); }
+  .status-pill.status-critical{ color: var(--status-critical); }
+
+  .as-of {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead th {
+    text-align: left;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--gridline);
+  }
+
+  thead th:not(:first-child), tbody td:not(:first-child) {
+    text-align: right;
+  }
+
+  tbody td {
+    padding: 12px;
+    border-bottom: 1px solid var(--gridline);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  td.source {
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  td.dim { color: var(--text-muted); }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+  }
+
+  .badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+  }
+
+  .badge.status-good     { color: var(--status-good); }
+  .badge.status-warning  { color: var(--status-warning); }
+  .badge.status-critical { color: var(--status-critical); }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <span class="brand">BITCOIN PRICING SERVICE</span>
+      <div class="topbar-right">
+        <div class="currency-toggle">
+          <button id="currency-usd" class="active" type="button">USD</button>
+          <button id="currency-gbp" type="button" disabled>GBP</button>
+        </div>
+        <span class="clock" id="clock"></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="price" id="price">— — —</div>
+        <div class="hero-meta">
+          <span class="status-pill" id="status-pill">
+            <span class="dot"></span><span id="status-label">CONNECTING</span>
+          </span>
+          <span class="as-of" id="as-of"></span>
+        </div>
+      </section>
+
+      <section class="breakdown">
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Price</th>
+              <th>Dev (bps)</th>
+              <th>Latency</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="breakdown-body"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const POLL_MS = 2500;
+
+    // Health status and per-source status are the same severity ladder under
+    // two names, so both map onto one status-color scale.
+    const STATUS_STYLE = {
+      live:    { css: "status-good",     label: "LIVE" },
+      degraded:{ css: "status-warning",  label: "DEGRADED" },
+      stale:   { css: "status-critical", label: "STALE" },
+      used:    { css: "status-good",     label: "USED" },
+      outlier: { css: "status-warning",  label: "OUTLIER" },
+      failed:  { css: "status-critical", label: "FAILED" },
+      offline: { css: "status-critical", label: "OFFLINE" },
+    };
+
+    const priceEl = document.getElementById("price");
+    const statusPillEl = document.getElementById("status-pill");
+    const statusLabelEl = document.getElementById("status-label");
+    const asOfEl = document.getElementById("as-of");
+    const breakdownBodyEl = document.getElementById("breakdown-body");
+    const clockEl = document.getElementById("clock");
+    const usdButtonEl = document.getElementById("currency-usd");
+    const gbpButtonEl = document.getElementById("currency-gbp");
+
+    let lastAsOf = null;
+    let currentData = null;
+    let currency = "USD";
+
+    // Converts an already-fetched USD figure for display only — the backend
+    // is the source of truth for BTC-USD; GBP is purely a client-side view,
+    // using the rate already carried in the last poll's response.
+    function formatMoney(usdValue) {
+      if (currency === "GBP" && currentData?.fx) {
+        return (usdValue * currentData.fx.gbp_rate).toLocaleString("en-GB", {
+          style: "currency",
+          currency: "GBP",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+      }
+      return usdValue.toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+
+    function setCurrencyButtons() {
+      const gbpAvailable = Boolean(currentData?.fx);
+      if (!gbpAvailable && currency === "GBP") currency = "USD";
+      usdButtonEl.classList.toggle("active", currency === "USD");
+      gbpButtonEl.classList.toggle("active", currency === "GBP");
+      gbpButtonEl.disabled = !gbpAvailable;
+    }
+
+    function selectCurrency(next) {
+      currency = next;
+      setCurrencyButtons();
+      if (currentData) render(currentData);
+    }
+
+    usdButtonEl.addEventListener("click", () => selectCurrency("USD"));
+    gbpButtonEl.addEventListener("click", () => selectCurrency("GBP"));
+
+    function formatBps(value) {
+      const sign = value > 0 ? "+" : "";
+      return `${sign}${value.toFixed(1)} bps`;
+    }
+
+    function secondsAgo(isoTimestamp) {
+      const seconds = Math.max(0, Math.round((Date.now() - Date.parse(isoTimestamp)) / 1000));
+      return seconds < 1 ? "just now" : `${seconds}s ago`;
+    }
+
+    function setStatusPill(status) {
+      const style = STATUS_STYLE[status] ?? { css: "status-critical", label: status.toUpperCase() };
+      statusPillEl.className = `status-pill ${style.css}`;
+      statusLabelEl.textContent = style.label;
+    }
+
+    function renderBreakdownRow(source) {
+      const style = STATUS_STYLE[source.status] ?? { css: "status-critical", label: source.status };
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td class="source">${source.source}</td>
+        <td class="${source.price === null ? "dim" : ""}">${source.price === null ? "—" : formatMoney(source.price)}</td>
+        <td class="${source.deviation_bps === null ? "dim" : ""}">${source.deviation_bps === null ? "—" : formatBps(source.deviation_bps)}</td>
+        <td>${Math.round(source.latency_ms)} ms</td>
+        <td>
+          <span class="badge ${style.css}" ${source.detail ? `title="${source.detail}"` : ""}>
+            <span class="dot"></span>${style.label}
+          </span>
+        </td>
+      `;
+      return row;
+    }
+
+    function render(data) {
+      currentData = data;
+      setCurrencyButtons();
+
+      priceEl.textContent = formatMoney(data.price);
+      setStatusPill(data.status);
+      lastAsOf = data.as_of;
+      asOfEl.textContent = secondsAgo(lastAsOf);
+
+      breakdownBodyEl.innerHTML = "";
+      for (const source of data.sources) {
+        breakdownBodyEl.appendChild(renderBreakdownRow(source));
+      }
+    }
+
+    function renderOffline() {
+      // The server may still be fine — this means the browser can't reach it
+      // at all, which is a different failure mode than a "stale" server-side
+      // response, so it gets its own label rather than being folded into it.
+      setStatusPill("offline");
+    }
+
+    async function poll() {
+      try {
+        const response = await fetch("/api/price");
+        if (!response.ok) {
+          renderOffline();
+          return;
+        }
+        render(await response.json());
+      } catch {
+        renderOffline();
+      }
+    }
+
+    poll();
+    setInterval(poll, POLL_MS);
+
+    // Ticks independently of the poll so "stale for Ns" keeps counting up
+    // between polls instead of only updating every 2.5s.
+    setInterval(() => {
+      if (lastAsOf) asOfEl.textContent = secondsAgo(lastAsOf);
+    }, 1000);
+
+    setInterval(() => {
+      clockEl.textContent = new Date().toLocaleTimeString("en-US", { hour12: false });
+    }, 1000);
+  </script>
+</body>
+</html>

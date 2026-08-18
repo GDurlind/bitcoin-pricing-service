@@ -17,6 +17,7 @@ from pricing_service.sources import (
     _parse_coinbase,
     _parse_kraken,
     fetch_all,
+    fetch_gbp_rate,
 )
 
 # --------------------------------------------------------------------------
@@ -144,3 +145,50 @@ async def test_fetch_all_isolates_failures():
     assert by_source["kraken"].kind == FailureKind.HTTP_ERROR
     assert isinstance(by_source["binance"], SourceFailure)
     assert by_source["binance"].kind == FailureKind.TIMEOUT
+
+
+# --------------------------------------------------------------------------
+# fetch_gbp_rate: no branching to test (any failure collapses to None), so
+# just prove success works and a couple of distinct failure modes both land
+# on None rather than raising.
+# --------------------------------------------------------------------------
+
+
+async def test_fetch_gbp_rate_success():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": "success", "rates": {"GBP": 0.79}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rate = await fetch_gbp_rate(client)
+
+    assert rate == pytest.approx(0.79)
+
+
+async def test_fetch_gbp_rate_http_error_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "unavailable"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rate = await fetch_gbp_rate(client)
+
+    assert rate is None
+
+
+async def test_fetch_gbp_rate_bad_payload_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rate = await fetch_gbp_rate(client)
+
+    assert rate is None
+
+
+async def test_fetch_gbp_rate_timeout_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rate = await fetch_gbp_rate(client)
+
+    assert rate is None
