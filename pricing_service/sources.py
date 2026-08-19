@@ -1,8 +1,14 @@
-"""Independent async fetchers, one per exchange.
+"""Independent async fetchers, one per exchange, plus one for USD/GBP FX.
 
 Each fetcher shares one httpx.AsyncClient (owned by main.py) but gets its own
-timeout budget. Every fetcher is guaranteed to return a SourceResult and never
-raise, so a slow or broken source can never take down the others.
+timeout budget. Every fetcher is guaranteed to return a value and never raise
+— _fetch_quote always returns a SourceResult, fetch_gbp_rate always returns a
+float or None — so a slow or broken source can never take down the others,
+and asyncio.gather never needs return_exceptions=True.
+
+fetch_all() and fetch_gbp_rate() are called concurrently from main.py via one
+outer asyncio.gather, and fetch_all() itself fans out into a second, nested
+gather over the four exchanges — see main.get_price() for the call site.
 """
 
 import asyncio
@@ -18,10 +24,19 @@ from pricing_service.models import FailureKind, PriceQuote, SourceFailure, Sourc
 
 
 def _parse_coinbase(data: Any) -> float:
+    """Extract the spot price from a Coinbase /v2/prices/BTC-USD/spot response."""
     return float(data["data"]["amount"])
 
 
 def _parse_kraken(data: Any) -> float:
+    """Extract the last-trade price from a Kraken /0/public/Ticker response.
+
+    Kraken can return HTTP 200 with an API-level error in the body (e.g. an
+    unknown pair), so `data["error"]` is checked explicitly rather than
+    trusting a 200 status alone. Raising here is deliberate: _fetch_quote's
+    broad except Exception converts it into a BAD_PAYLOAD failure, exactly as
+    it would for a genuinely malformed response.
+    """
     if data.get("error"):
         raise ValueError(f"kraken error: {data['error']}")
     ticker = next(iter(data["result"].values()))
@@ -29,15 +44,30 @@ def _parse_kraken(data: Any) -> float:
 
 
 def _parse_binance(data: Any) -> float:
+    """Extract the price from a Binance /api/v3/ticker/price response."""
     return float(data["price"])
 
 
 def _parse_bitstamp(data: Any) -> float:
+    """Extract the last-trade price from a Bitstamp /api/v2/ticker response."""
     return float(data["last"])
 
 
 @dataclass(frozen=True, slots=True)
 class SourceConfig:
+    """One exchange's fetch configuration.
+
+    Attributes:
+        name: Exchange name, used as PriceQuote.source / SourceFailure.source.
+        url: The REST endpoint to GET.
+        timeout: Per-source timeout budget, in seconds. Deliberately varies
+            per exchange — e.g. Kraken's public ticker is measurably slower
+            under load, and Binance either responds fast or 451s instantly
+            (US-origin IPs are geofenced), so waiting longer for it buys
+            nothing.
+        parse: A function turning the parsed JSON body into a float price.
+    """
+
     name: str
     url: str
     timeout: float
@@ -70,6 +100,27 @@ async def _fetch_quote(
     timeout: float,
     parse: Callable[[Any], float],
 ) -> SourceResult:
+    """Fetch and parse one exchange's BTC-USD price. Never raises.
+
+    The only suspension point is `await client.get(...)` — everything else
+    (parsing, building the result) is synchronous CPU work on already-fetched
+    data. Every failure mode — timeout, bad HTTP status, malformed payload, or
+    a network-level error — is caught and converted into a typed
+    SourceFailure rather than propagating, so a single broken source can
+    never take down the asyncio.gather() in fetch_all().
+
+    Args:
+        client: The shared httpx.AsyncClient (owned by main.py's lifespan).
+        name: Exchange name, used as the result's `source` field.
+        url: The REST endpoint to GET.
+        timeout: This source's own timeout budget, in seconds.
+        parse: Turns the parsed JSON body into a float price; may raise on
+            an unexpected shape, which is caught by the final except clause
+            below and reported as BAD_PAYLOAD.
+
+    Returns:
+        A PriceQuote on success, or a SourceFailure describing why not.
+    """
     start = time.perf_counter()
     try:
         response = await client.get(url, timeout=timeout)
@@ -99,7 +150,20 @@ async def _fetch_quote(
 
 
 async def fetch_all(client: httpx.AsyncClient) -> list[SourceResult]:
-    """Fetch every source concurrently. A slow or failing source never blocks the rest."""
+    """Fetch all four exchanges concurrently via asyncio.gather.
+
+    Every _fetch_quote call is wrapped into its own Task by gather, so all
+    four are in flight at once — the wall-clock cost of this call is roughly
+    the slowest single source's latency, not the sum of all four. A slow or
+    failing source never blocks or affects the others.
+
+    Args:
+        client: The shared httpx.AsyncClient to fetch with.
+
+    Returns:
+        One SourceResult per entry in SOURCES, in the same order as SOURCES
+        (gather preserves argument order regardless of completion order).
+    """
     return list(
         await asyncio.gather(
             *(_fetch_quote(client, s.name, s.url, s.timeout, s.parse) for s in SOURCES)
@@ -118,6 +182,13 @@ async def fetch_gbp_rate(client: httpx.AsyncClient) -> float | None:
     need cross-source consensus, so a single reputable source is fine. There's
     no per-source breakdown to explain a failure to, so unlike _fetch_quote
     this just collapses any failure to None rather than a typed SourceFailure.
+
+    Args:
+        client: The shared httpx.AsyncClient to fetch with.
+
+    Returns:
+        The current USD/GBP rate, or None on any failure (timeout, HTTP
+        error, or an unexpected response shape).
     """
     try:
         response = await client.get(FX_URL, timeout=FX_TIMEOUT)
